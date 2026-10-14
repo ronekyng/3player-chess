@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>三轴正交三人象棋 Demo（3D）</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#0b0c10;color:#eee;font-family:"Microsoft YaHei",system-ui}
+#info{position:absolute;top:10px;left:10px;z-index:10;background:rgba(10,12,18,.85);padding:14px 16px;border-radius:12px;min-width:230px;border:1px solid #2a2f3a}
+#info h3{margin-bottom:8px;font-size:15px;letter-spacing:1px}
+#turnRow{margin-bottom:6px}
+#turn{font-weight:700}
+.turn-red{color:#ff6b6b}.turn-blue{color:#5aa9ff}.turn-green{color:#ffd447}
+#tip{font-size:13px;color:#9aa3b2;min-height:20px;margin-bottom:8px}
+#resetBtn,#modeBtn{padding:6px 14px;cursor:pointer;background:#232834;border:1px solid #3a4150;color:#eee;border-radius:8px}
+#resetBtn:hover,#modeBtn:hover{background:#2f3646}
+#legend{position:absolute;top:10px;right:10px;z-index:10;background:rgba(10,12,18,.82);padding:10px 12px;border-radius:12px;font-size:12px;color:#b8c0cf;border:1px solid #2a2f3a;line-height:1.9}
+#legend b{color:#fff}
+#legend .row{margin:3px 0}
+#log{position:absolute;bottom:10px;left:10px;width:340px;height:170px;overflow-y:auto;background:rgba(10,12,18,.85);padding:10px;border-radius:12px;font-size:12px;border:1px solid #2a2f3a}
+#log div{line-height:1.6;border-bottom:1px solid #1c2029;padding:2px 0}
+#banner{position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);z-index:20;background:rgba(0,0,0,.92);padding:30px 50px;border-radius:14px;text-align:center;display:none;border:2px solid #ffcc33}
+#banner h2{margin-bottom:10px;font-size:26px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div id="info">
+  <h3>三轴正交三人象棋（3D）</h3>
+  <div id="turnRow">当前回合：<span id="turn">红(XY)</span></div>
+  <div id="tip">拖拽旋转视角 · 点击棋子选中，再点高亮点落子</div>
+  <div style="display:flex;gap:8px">
+    <button id="resetBtn">重置对局</button>
+    <button id="modeBtn">平面模式</button>
+  </div>
+</div>
+<div id="legend">
+  <div class="row"><span class="dot" style="background:#ff6b6b"></span>红 · XY 平面</div>
+  <div class="row"><span class="dot" style="background:#5aa9ff"></span>蓝 · XZ 平面</div>
+  <div class="row"><span class="dot" style="background:#ffd447"></span>黄 · YZ 平面</div>
+  <div class="row" style="margin-top:8px;border-top:1px solid #2a2f3a;padding-top:6px">
+    <span class="dot" style="background:#ff22aa"></span><span class="dot" style="background:#ff9922;margin-left:4px"></span><span class="dot" style="background:#42e07c;margin-left:4px"></span>
+    <span style="color:#8a93a3">　虚线弧 = 棋盘线过河延伸段（品紫 红↔蓝 / 橙 红↔黄 / 绿 蓝↔黄）</span>
+  </div>
+  <div class="row" style="margin-top:4px">
+    <span class="dot" style="background:#27d8c8"></span>青色扇区 = 中心连通枢纽（三条河交汇）
+  </div>
+  <div class="row" style="margin-top:4px;color:#8a93a3">内缘 0 号线 = 连通轴线（AXIS_COL=0）</div>
+  <div class="row" style="margin-top:4px;color:#8a93a3">车/炮沿通道经弧过河；兵跨河踏入对方河界线即过河；马在轴线上可走三维跨平面日</div>
+  <div class="row" style="margin-top:4px;color:#8a93a3">回合切换时棋盘整体旋转 120°，行棋方棋盘始终位于下方（地板位）</div>
+  <div class="row" style="margin-top:4px">
+    <span class="dot" style="background:#3ce0e0"></span>平面内落点（青色）
+    <span class="dot" style="background:#ff22aa;margin-left:10px"></span>跨平面落点（品红色）
+  </div>
+</div>
+<div id="log"></div>
+<div id="banner"><h2 id="bannerText"></h2><button id="againBtn" style="padding:8px 20px;cursor:pointer">再来一局</button></div>
+
+<!-- 共享规则引擎：与平面版（index-2d.html）完全同一套规则 -->
+<script src="chess-rules.js"></script>
+<!-- Three.js r128 本地副本（lib/），无需联网加载 CDN -->
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script>
+"use strict";
+/* 加载失败守卫：Three.js 缺失时给出可读提示，替代控制台晦涩报错 */
+if(typeof THREE==="undefined"){
+  document.getElementById("tip").innerText="⚠ Three.js 库未加载：请确认 lib/three.min.js 与 lib/OrbitControls.js 存在后刷新";
+  document.getElementById("tip").style.color="#ff6b6b";
+  throw new Error("THREE is not defined — lib/three.min.js 加载失败");
+}
+/* 规则引擎由 chess-rules.js 提供：
+   COLS/ROWS/AXIS_COL/TYPE/OWNER_PLANE/PLANE_OWNER/PLANES/TYPE_NAME
+   pieces/initPieces/legalMoves/allLegalMoves/inCheck/checkmate/applyMove/onAxis */
+
+/* ===================== 游戏状态（UI 层） ===================== */
+let selected=null, turnIdx=0, gameOver=false;
+const turnOrder=["XY","XZ","YZ"]; // 红→蓝→绿
+
+/* 回合视角旋转：三板恰好绕 (1,1,1) 对角轴 120° 对称（XY→XZ→YZ 槽位轮换）。
+   回合切换时整个棋盘世界绕该轴旋转 ±120°，让行棋方棋盘轮换到“地板位”（屏幕下方），
+   相机保持不动，用户仍可随时拖拽微调视角 */
+const AXIS1=new THREE.Vector3(1,1,1).normalize();
+let worldTween=null, worldAngle=0;
+function easeIO(k){ return k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2; }
+function startWorldTween(steps){
+  // +120°/步：绕 (1,1,1) 轴正向旋转把下一家棋盘转到地板位（红→蓝→绿轮换）
+  worldTween={from:worldAngle,to:worldAngle+steps*2*Math.PI/3,t0:performance.now(),dur:650};
+}
+
+/* ===================== Three.js ===================== */
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,4000);
+camera.position.set(20,16,22);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.outputEncoding=THREE.sRGBEncoding;
+document.body.appendChild(renderer.domElement);
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true; controls.dampingFactor=0.08;
+controls.target.set(5,5,5);
+controls.minDistance=8; controls.maxDistance=70;
+// 视角约束：始终从参考图的对角方向观察立方体角，防止转到背面/正俯视叠成一团
+controls.minPolarAngle=Math.PI*0.14;    // ≈25°，避免正俯视（“平面图”会叠影）
+controls.maxPolarAngle=Math.PI*0.48;    // ≈86°，避免钻到棋盘底下
+controls.minAzimuthAngle=Math.PI*0.06;  // ≈11°
+controls.maxAzimuthAngle=Math.PI*0.44;  // ≈79°，保持在正对角落的扇形区间内
+
+/* 渐变背景 */
+(function(){
+  const c=document.createElement("canvas");c.width=4;c.height=256;
+  const ctx=c.getContext("2d");
+  const g=ctx.createLinearGradient(0,0,0,256);
+  g.addColorStop(0,"#171a24");g.addColorStop(1,"#06070c");
+  ctx.fillStyle=g;ctx.fillRect(0,0,4,256);
+  scene.background=new THREE.CanvasTexture(c);
+})();
+scene.add(new THREE.HemisphereLight(0xcfe0ff,0x14161d,0.95));
+const keyLight=new THREE.DirectionalLight(0xffffff,0.95); keyLight.position.set(12,22,16); scene.add(keyLight);
+const fillLight=new THREE.DirectionalLight(0x8fb4ff,0.4); fillLight.position.set(-16,-8,-12); scene.add(fillLight);
+
+const world=new THREE.Group(); scene.add(world);
+const raycaster=new THREE.Raycaster();
+const pointer=new THREE.Vector2();
+const pieceMeshes=[], markerMeshes=[];
+const boardFrames={}; // plane → 板框 LineLoop（回合切换时加亮行棋方板框）
+
+const COLOR={red:0xff6b6b,blue:0x5aa9ff,green:0xffd447,marker:0x3ce0e0,cross:0xff22aa,sel:0xffffff};
+const COLOR_HEX={red:"#ff6b6b",blue:"#5aa9ff",green:"#ffd447",sel:"#ffffff"};
+const OWNER_NAME={red:"红",blue:"蓝",green:"黄"}; // 阵营中文显示名（引擎 id 保持 red/blue/green）
+
+/* 平面内坐标 → 世界坐标：板缘与坐标面之间留 GAP，板间界河宽≈1格（GAP*√2=1.0），三块板互不相接 */
+const GAP=0.71;
+function worldPos(plane,col,rank,lift){
+  const g=GAP+col, w=GAP+rank;
+  if(plane==="XY") return new THREE.Vector3(g,w,lift);
+  if(plane==="XZ") return new THREE.Vector3(g,lift,w);
+  return new THREE.Vector3(lift,g,w); // YZ
+}
+function normalOf(plane){
+  if(plane==="XY") return new THREE.Vector3(0,0,1);
+  if(plane==="XZ") return new THREE.Vector3(0,1,0);
+  return new THREE.Vector3(1,0,0); // YZ
+}
+function planeBasis(plane){
+  if(plane==="XY") return {u:new THREE.Vector3(1,0,0),w:new THREE.Vector3(0,1,0)};
+  if(plane==="XZ") return {u:new THREE.Vector3(1,0,0),w:new THREE.Vector3(0,0,1)};
+  return {u:new THREE.Vector3(0,1,0),w:new THREE.Vector3(0,0,1)}; // YZ
+}
+function orientTo(mesh,dir){ mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.clone().normalize()); }
+function addLine(a,b,color,opacity){
+  const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints([a,b]),
+    new THREE.LineBasicMaterial({color,transparent:true,opacity}));
+  world.add(l); return l;
+}
+function gridColor(owner){ return new THREE.Color(COLOR[owner]).lerp(new THREE.Color(0xffffff),0.5).getHex(); }
+
+/* ===================== 棋盘网格绘制 ===================== */
+function drawBoard(){
+  const L=0.015;
+  for(const plane of PLANES){
+    const owner=PLANE_OWNER[plane];
+    const gc=gridColor(owner);
+    const {u,w}=planeBasis(plane);
+    const n=new THREE.Vector3().crossVectors(u,w).normalize();
+    const basis=new THREE.Matrix4().makeBasis(u,w,n);
+    // 棋盘面板（阵营色暗调）
+    const panel=new THREE.Mesh(
+      new THREE.PlaneGeometry(COLS-1+0.7,ROWS-1+0.7),
+      new THREE.MeshBasicMaterial({
+        color:new THREE.Color(COLOR[owner]).lerp(new THREE.Color(0x0c0f16),0.8),
+        side:THREE.DoubleSide
+      }));
+    panel.quaternion.setFromRotationMatrix(basis);
+    panel.position.copy(worldPos(plane,(COLS-1)/2,(ROWS-1)/2,0));
+    world.add(panel);
+    // 中心连通区（枢纽嘴：朝原点枢纽张开）
+    const hubZone=new THREE.Mesh(new THREE.CircleGeometry(2.3,40),
+      new THREE.MeshBasicMaterial({color:0x27d8c8,transparent:true,opacity:0.15,side:THREE.DoubleSide}));
+    hubZone.quaternion.setFromRotationMatrix(basis);
+    hubZone.position.copy(worldPos(plane,1,1,L));
+    world.add(hubZone);
+    // 文件线（col 方向）；内缘 0 号线为连通轴线（AXIS_COL）
+    for(let c=0;c<COLS;c++){
+      addLine(worldPos(plane,c,0,L),worldPos(plane,c,ROWS-1,L),gc,c===AXIS_COL?0.75:0.32);
+    }
+    // 排名线（rank 方向）；内缘 0 号线为连通轴线（AXIS_COL）
+    for(let r=0;r<ROWS;r++){
+      addLine(worldPos(plane,0,r,L),worldPos(plane,COLS-1,r,L),gc,r===AXIS_COL?0.75:0.32);
+    }
+    // 九宫斜线（角隅九宫 [5,7]×[5,7]）
+    addLine(worldPos(plane,5,5,L),worldPos(plane,7,7,L),gc,0.5);
+    addLine(worldPos(plane,5,7,L),worldPos(plane,7,5,L),gc,0.5);
+    // 阵营色边框（存入 boardFrames：行棋方板框加亮，§7.4.1）
+    const frame=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints([
+      worldPos(plane,0,0,L),worldPos(plane,COLS-1,0,L),
+      worldPos(plane,COLS-1,ROWS-1,L),worldPos(plane,0,ROWS-1,L)
+    ]),new THREE.LineBasicMaterial({color:COLOR[owner],transparent:true,opacity:0.95}));
+    world.add(frame); boardFrames[plane]=frame;
+  }
+  // 界河：棋盘线延伸过河——对面的线与本线不在同一平面，中间跨河段以虚线弧表示（半径=GAP，贴缝轴）
+  // 河色（§1.1）：品紫 X河 红↔蓝 / 橙 Y河 红↔黄 / 绿 Z河 蓝↔黄
+  const CROSS=[
+    {color:0xff22aa, w:new THREE.Vector3(1,0,0), u:new THREE.Vector3(0,1,0), v:new THREE.Vector3(0,0,1)}, // 红↔蓝
+    {color:0xff9922, w:new THREE.Vector3(0,1,0), u:new THREE.Vector3(1,0,0), v:new THREE.Vector3(0,0,1)}, // 红↔黄
+    {color:0x42e07c, w:new THREE.Vector3(0,0,1), u:new THREE.Vector3(1,0,0), v:new THREE.Vector3(0,1,0)}  // 蓝↔黄
+  ];
+  function addDashedLine(pts,color){
+    const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineDashedMaterial({color,dashSize:0.2,gapSize:0.13,transparent:true,opacity:0.85}));
+    l.computeLineDistances(); world.add(l); return l;
+  }
+  for(const s of CROSS){
+    for(let i=0;i<COLS;i++){
+      const o=s.w.clone().multiplyScalar(GAP+i);          // 缝轴上第 i 条线的位置
+      const c=o.clone().addScaledVector(s.u,GAP).addScaledVector(s.v,GAP); // 河的外对角 = 弧心
+      const pts=[];
+      for(let k=0;k<=20;k++){
+        const a=Math.PI/2*k/20;                           // 起点切于本板线方向，终点切于对面线方向
+        pts.push(c.clone().addScaledVector(s.u,-GAP*Math.sin(a)).addScaledVector(s.v,-GAP*Math.cos(a)));
+      }
+      addDashedLine(pts,s.color);
+    }
+  }
+  // 中心枢纽：三块板的 (0,0) 角隔河相望于原点
+  const hub=new THREE.Mesh(new THREE.SphereGeometry(0.3,20,20),
+    new THREE.MeshBasicMaterial({color:0x9ef6ff,transparent:true,opacity:0.9}));
+  hub.position.set(0,0,0); world.add(hub);
+  const hubLight=new THREE.PointLight(0x66e0ff,0.9,24); hubLight.position.set(0,0,0); scene.add(hubLight);
+}
+
+/* ===================== 渲染 ===================== */
+const charTexCache={};
+function charTexture(ch,colorHex){
+  const key=ch+"|"+colorHex;
+  if(charTexCache[key]) return charTexCache[key];
+  const canvas=document.createElement("canvas");canvas.width=128;canvas.height=128;
+  const ctx=canvas.getContext("2d");
+  ctx.clearRect(0,0,128,128);
+  ctx.font="bold 88px 'Microsoft YaHei','KaiTi',sans-serif";
+  ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.lineWidth=12;ctx.strokeStyle="rgba(0,0,0,0.85)";
+  ctx.strokeText(ch,64,70);
+  ctx.fillStyle=colorHex;ctx.fillText(ch,64,70);
+  const tex=new THREE.CanvasTexture(canvas);
+  charTexCache[key]=tex;
+  return tex;
+}
+/* 释放几何体/材质，避免每次重绘泄漏 GPU 资源（discGeo 与缓存纹理为共享资源，不释放） */
+function disposeMesh(m){
+  if(m.geometry&&m.geometry!==discGeo) m.geometry.dispose();
+  const mats=Array.isArray(m.material)?m.material:(m.material?[m.material]:[]);
+  for(const mt of mats) mt.dispose();
+}
+function clearMeshes(list){ for(const m of list){ world.remove(m); disposeMesh(m); } list.length=0; }
+const discGeo=new THREE.CircleGeometry(0.33,28);
+/* 刻字朝向：各平面棋子顶面文字的（右，上）方向，保证字贴在顶面且正读 */
+const FACE_BASIS={
+  XY:{r:new THREE.Vector3(1,0,0), u:new THREE.Vector3(0,1,0)},
+  XZ:{r:new THREE.Vector3(1,0,0), u:new THREE.Vector3(0,0,-1)},
+  YZ:{r:new THREE.Vector3(0,1,0), u:new THREE.Vector3(0,0,1)}
+};
+function renderPieces(){
+  clearMeshes(pieceMeshes);
+  for(const p of pieces){
+    const n=normalOf(p.plane);
+    // 底座（阵营色）
+    const base=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.54,0.14,30),
+      new THREE.MeshStandardMaterial({color:COLOR[p.owner],roughness:0.4,metalness:0.5,
+        emissive:COLOR[p.owner],emissiveIntensity:0.18}));
+    orientTo(base,n); base.position.copy(worldPos(p.plane,p.col,p.rank,0.07));
+    base.userData.piece=p; world.add(base); pieceMeshes.push(base);
+    // 主体（深色棋体）
+    const body=new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.47,0.42,30),
+      new THREE.MeshStandardMaterial({color:0x232a38,roughness:0.55,metalness:0.25}));
+    orientTo(body,n); body.position.copy(worldPos(p.plane,p.col,p.rank,0.35));
+    body.userData.piece=p; world.add(body); pieceMeshes.push(body);
+    // 刻字（贴在棋子顶面，不悬浮）
+    const fb=FACE_BASIS[p.plane];
+    const disc=new THREE.Mesh(discGeo,new THREE.MeshBasicMaterial({
+      map:charTexture(TYPE_NAME[p.type],COLOR_HEX[p.owner]),transparent:true}));
+    disc.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(fb.r,fb.u,normalOf(p.plane)));
+    disc.position.copy(worldPos(p.plane,p.col,p.rank,0.58));
+    disc.userData.piece=p;
+    world.add(disc); pieceMeshes.push(disc);
+  }
+  if(selected){
+    const n=normalOf(selected.plane);
+    const ring=new THREE.Mesh(new THREE.TorusGeometry(0.6,0.055,10,32),
+      new THREE.MeshBasicMaterial({color:COLOR.sel}));
+    ring.position.copy(worldPos(selected.plane,selected.col,selected.rank,0.72));
+    ring.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),n.clone().normalize());
+    ring.userData.piece=selected;
+    world.add(ring); pieceMeshes.push(ring);
+  }
+}
+function renderMarkers(moves){
+  clearMeshes(markerMeshes);
+  for(const m of moves){
+    const cross=m.plane!==selected.plane;
+    const geo=new THREE.SphereGeometry(cross?0.28:0.22,14,14);
+    const mat=new THREE.MeshBasicMaterial({color:cross?COLOR.cross:COLOR.marker});
+    const mesh=new THREE.Mesh(geo,mat);
+    mesh.userData.move=m;
+    mesh.position.copy(worldPos(m.plane,m.col,m.rank,0.55));
+    world.add(mesh); markerMeshes.push(mesh);
+  }
+}
+
+/* ===================== UI ===================== */
+/* 行棋方"（你）"标注精灵（§7.4.1），随回合移动到当前板外角 */
+const youLabel=(function(){
+  const c=document.createElement("canvas");c.width=160;c.height=64;
+  const g=c.getContext("2d");
+  g.font="bold 38px 'Microsoft YaHei',sans-serif";
+  g.textAlign="center";g.textBaseline="middle";
+  g.lineWidth=8;g.strokeStyle="rgba(0,0,0,.85)";g.strokeText("（你）",80,32);
+  g.fillStyle="#ffd447";g.fillText("（你）",80,32);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));
+  sp.scale.set(3.4,1.36,1); sp.visible=false; world.add(sp); return sp;
+})();
+const BOARD_OUT={XY:new THREE.Vector3(1,1,0),XZ:new THREE.Vector3(1,0,1),YZ:new THREE.Vector3(0,1,1)}; // 各板外角方向
+function updateBoardFocus(){
+  const pl=turnOrder[turnIdx];
+  for(const p of PLANES){
+    const f=boardFrames[p]; if(!f) continue;
+    const cur=p===pl;
+    f.material.opacity=cur?1:0.3;
+    f.material.color.set(cur?COLOR[PLANE_OWNER[p]]:0x39414f);
+  }
+  youLabel.visible=true;
+  youLabel.position.copy(worldPos(pl,7,7,0.6)).addScaledVector(BOARD_OUT[pl].clone().normalize(),1.5);
+}
+function setTurnUI(){
+  const pl=turnOrder[turnIdx], owner=PLANE_OWNER[pl];
+  const el=document.getElementById("turn");
+  el.innerText=OWNER_NAME[owner]+"("+pl+")";
+  el.className="turn-"+owner;
+  updateBoardFocus();
+}
+function addLog(txt){
+  const d=document.getElementById("log");
+  d.innerHTML+="<div>"+txt+"</div>";
+  d.scrollTop=d.scrollHeight;
+}
+function descPiece(m){ const cn=["零","一","二","三","四","五","六","七"]; return cn[m.col]+"路"+cn[7-m.rank]+"行"; }
+
+/* ===================== 对局流程 ===================== */
+/* 出局清算（§4.2.3/§4.5）：将士象拔掉，兵马车炮归将军者统领；即时重渲染防止幽灵棋子 */
+function eliminate(owner,winner){
+  winner=winner||(checkerOf(owner)||{}).owner;
+  const res=eliminatePlayer(owner,winner);
+  addLog("<span style='color:#ffaa44'>⚠ "+OWNER_NAME[owner]+" 被将死，出局！将士象拔掉（"+res.pulled+"枚），兵马车炮 "+res.transferred+" 枚归 "+(winner?OWNER_NAME[winner]:"?")+" 统领</span>");
+  renderPieces();
+}
+function checkVictory(){
+  const alive=[...new Set(pieces.map(p=>p.owner))];
+  if(alive.length<=1){
+    gameOver=true;
+    document.getElementById("bannerText").innerText=alive.length===1?("🏆 "+OWNER_NAME[alive[0]]+" 获胜！"):"平局";
+    document.getElementById("banner").style.display="block";
+    return true;
+  }
+  return false;
+}
+/* §4.2.3：剩余两家时，出现将军即将军方最终获胜 */
+function suddenWin(mover){
+  const alive=[...new Set(pieces.map(p=>p.owner))];
+  if(alive.length!==2) return false;
+  const other=alive.find(o=>o!==mover);
+  if(!other||!inCheck(other)) return false;
+  gameOver=true;
+  addLog("⚔ 两家对弈："+OWNER_NAME[mover]+" 将军 "+OWNER_NAME[other]+"，"+OWNER_NAME[mover]+" 最终获胜！");
+  document.getElementById("bannerText").innerText="🏆 "+OWNER_NAME[mover]+" 获胜！";
+  document.getElementById("banner").style.display="block";
+  return true;
+}
+function advanceTurn(depth){
+  depth=depth||0;
+  if(depth>=3){ // 连续跳过全部存活方仍无子可走（§4.6：无法判定 → 平局）
+    gameOver=true;
+    document.getElementById("bannerText").innerText="平局";
+    document.getElementById("banner").style.display="block";
+    return;
+  }
+  const prev=turnIdx;
+  for(let i=0;i<3;i++){
+    turnIdx=(turnIdx+1)%3;
+    const pl=turnOrder[turnIdx];
+    if(pieces.some(p=>p.owner===PLANE_OWNER[pl])) break;
+  }
+  setTurnUI();
+  const curPl=turnOrder[turnIdx], curOwner=PLANE_OWNER[curPl];
+  if(inCheck(curOwner)) addLog("⚠ "+OWNER_NAME[curOwner]+" 被将军，必须应将！");
+  if(allLegalMoves(curOwner).length===0){
+    if(inCheck(curOwner)){ eliminate(curOwner,checkerOf(curOwner)?checkerOf(curOwner).owner:null); }
+    else { addLog(OWNER_NAME[curOwner]+" 无子可走，回合跳过"); }
+    if(!checkVictory()) advanceTurn(depth+1);
+    return;
+  }
+  const steps=(turnIdx-prev+3)%3;
+  if(steps>0) startWorldTween(steps);
+}
+function doMove(piece,m){
+  const wasPlane=piece.plane, fromDesc=descPiece(piece);
+  const cap=applyMove(piece,m);
+  const cross=m.plane!==wasPlane;
+  let logTxt=OWNER_NAME[PLANE_OWNER[wasPlane]]+" "+TYPE_NAME[piece.type]+" 从"+wasPlane+" "+fromDesc+" 至"+m.plane+" "+descPiece({col:m.col,rank:m.rank})+(cross?"（跨平面）":"");
+  if(cap) logTxt+=" 吃 "+OWNER_NAME[cap.owner]+" "+TYPE_NAME[cap.type];
+  addLog(logTxt);
+  selected=null; renderPieces(); renderMarkers([]);
+  // 出局清算（§4.2.3）：其他两家被将死者，兵马车炮归走子方统领
+  for(const pl of PLANES){
+    const o=PLANE_OWNER[pl];
+    if(o===piece.owner) continue;
+    if(!pieces.some(p=>p.owner===o)) continue;
+    if(checkmate(o)){ eliminate(o,piece.owner); }
+  }
+  if(checkVictory()) return;
+  if(suddenWin(piece.owner)) return;
+  advanceTurn();
+}
+
+/* ===================== 交互 ===================== */
+function onPointer(e){
+  if(gameOver) return;
+  pointer.x=(e.clientX/innerWidth)*2-1;
+  pointer.y=-(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(pointer,camera);
+  // 1) 落点标记
+  const mm=raycaster.intersectObjects(markerMeshes);
+  if(mm.length&&selected){ doMove(selected,mm[0].object.userData.move); return; }
+  // 2) 棋子
+  const pm=raycaster.intersectObjects(pieceMeshes);
+  if(pm.length){
+    const p=pm[0].object.userData.piece;
+    if(p&&PLANE_OWNER[turnOrder[turnIdx]]===p.owner){
+      const moves=legalMoves(p);
+      if(moves.length===0){ document.getElementById("tip").innerText="该棋子无合法走法"; selected=null; renderPieces(); renderMarkers([]); return; }
+      selected=p; renderPieces(); renderMarkers(moves);
+      document.getElementById("tip").innerText="已选"+OWNER_NAME[p.owner]+" "+TYPE_NAME[p.type]+"，共"+moves.length+"处落点（品红色为跨平面落点）";
+    }else{
+      selected=null; renderPieces(); renderMarkers([]);
+      document.getElementById("tip").innerText="不能选择对方/非当前回合棋子";
+    }
+  }else{
+    selected=null; renderPieces(); renderMarkers([]);
+    document.getElementById("tip").innerText="点击棋子选中";
+  }
+}
+
+/* ===================== 启动 ===================== */
+function reset(){
+  gameOver=false; selected=null; turnIdx=0; worldTween=null;
+  worldAngle=-Math.PI*2/3; // -120°：绕 (1,1,1) 轴负向把红方(XY)棋盘转到地板位（屏幕下方，红先行）
+  world.setRotationFromAxisAngle(AXIS1,worldAngle);
+  camera.position.set(20,16,22);
+  controls.target.set(5,5,5); controls.update();
+  document.getElementById("banner").style.display="none";
+  document.getElementById("log").innerHTML="";
+  document.getElementById("tip").innerText="拖拽旋转视角 · 点击棋子选中，再点高亮点落子";
+  clearMeshes(pieceMeshes); clearMeshes(markerMeshes);
+  initPieces(); renderPieces(); setTurnUI();
+  addLog("对局开始，红方先行（点击棋子→点击高亮点）");
+}
+/* 仅画布接收点击（面板/图例不再穿透走子）；仅左键；旋转动画期间锁输入（与平面版一致） */
+renderer.domElement.addEventListener("pointerdown",e=>{
+  if(e.button!==undefined&&e.button!==0) return;
+  if(worldTween) return;
+  onPointer(e);
+});
+document.getElementById("resetBtn").onclick=reset;
+document.getElementById("againBtn").onclick=reset;
+document.getElementById("modeBtn").onclick=()=>{ location.href="index-2d.html"; };
+function animate(){
+  requestAnimationFrame(animate);
+  if(worldTween){
+    const k=Math.min(1,(performance.now()-worldTween.t0)/worldTween.dur);
+    worldAngle=worldTween.from+(worldTween.to-worldTween.from)*easeIO(k);
+    world.setRotationFromAxisAngle(AXIS1,worldAngle);
+    if(k>=1) worldTween=null;
+  }
+  controls.update();
+  renderer.render(scene,camera);
+}
+window.addEventListener("resize",()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+
+drawBoard();
+reset();
+animate();
+</script>
+</body>
+</html>

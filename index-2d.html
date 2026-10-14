@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>三轴正交三人象棋 Demo（平面模式）</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#0b0c10;color:#eee;font-family:"Microsoft YaHei",system-ui}
+#cv{position:absolute;inset:0;display:block}
+#info{position:absolute;top:10px;left:10px;z-index:10;background:rgba(10,12,18,.9);padding:14px 16px;border-radius:12px;min-width:230px;border:1px solid #2a2f3a}
+#info h3{margin-bottom:8px;font-size:15px;letter-spacing:1px}
+#turnRow{margin-bottom:6px}
+#turn{font-weight:700}
+.turn-red{color:#ff6b6b}.turn-blue{color:#5aa9ff}.turn-green{color:#ffd447}
+#tip{font-size:13px;color:#9aa3b2;min-height:20px;margin-bottom:8px}
+#resetBtn,#modeBtn,#viewBtn{padding:6px 14px;cursor:pointer;background:#232834;border:1px solid #3a4150;color:#eee;border-radius:8px}
+#resetBtn:hover,#modeBtn:hover,#viewBtn:hover{background:#2f3646}
+#legendFan,#legendSq{position:absolute;top:10px;right:10px;z-index:10;background:rgba(10,12,18,.88);padding:10px 12px;border-radius:12px;font-size:12px;color:#b8c0cf;border:1px solid #2a2f3a;line-height:1.9}
+#legendFan .row,#legendSq .row{margin:3px 0}
+#log{position:absolute;bottom:10px;left:10px;width:340px;height:170px;overflow-y:auto;background:rgba(10,12,18,.9);padding:10px;border-radius:12px;font-size:12px;border:1px solid #2a2f3a}
+#log div{line-height:1.6;border-bottom:1px solid #1c2029;padding:2px 0}
+#banner{position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);z-index:20;background:rgba(0,0,0,.92);padding:30px 50px;border-radius:14px;text-align:center;display:none;border:2px solid #ffcc33}
+#banner h2{margin-bottom:10px;font-size:26px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="info">
+  <h3>三轴正交三人象棋（平面模式）</h3>
+  <div id="turnRow">当前回合：<span id="turn">红(XY)</span></div>
+  <div id="tip">点击棋子选中，再点高亮点落子；行棋方棋盘位于正下方（顺时针 红→蓝→黄）</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button id="resetBtn">重置对局</button>
+    <button id="viewBtn">方形视图</button>
+    <button id="modeBtn">3D 模式</button>
+  </div>
+</div>
+<div id="legendFan">
+  <div class="row" style="color:#fff">2D-1 平面图（参照布置图）</div>
+  <div class="row"><span class="dot" style="background:#ff6b6b"></span>红 · XY　<span class="dot" style="background:#5aa9ff;margin-left:8px"></span>蓝 · XZ　<span class="dot" style="background:#ffd447;margin-left:8px"></span>黄 · YZ</div>
+  <div class="row" style="color:#8a93a3">每板为 45° 菱形方格：将位角（7,7）朝外，内缘两臂贴枢纽</div>
+  <div class="row" style="color:#8a93a3">橙色线 = 前线（col+rank 等值线）；虚线弧 = 棋盘线过河延伸段（U 形弯接相邻板对应线）</div>
+  <div class="row" style="color:#8a93a3">展开平面顺时针 红→蓝→黄；回合切换整体旋转 120°，行棋方转到正下方</div>
+  <div class="row" style="margin-top:4px">
+    <span class="dot" style="background:#3ce0e0"></span>本板落点（青色）
+    <span class="dot" style="background:#ff22aa;margin-left:10px"></span>跨板落点（品红色）
+  </div>
+</div>
+<div id="legendSq" style="display:none">
+  <div class="row" style="color:#fff">2D-2 L形视图（三方方形棋盘）</div>
+  <div class="row"><span class="dot" style="background:#ff6b6b"></span>红 · XY　<span class="dot" style="background:#5aa9ff;margin-left:8px"></span>蓝 · XZ　<span class="dot" style="background:#ffd447;margin-left:8px"></span>黄 · YZ</div>
+  <div class="row" style="color:#8a93a3">行棋方棋盘在下方，上一家在其上方、下一家在其上方之右；顺时针 红→蓝→黄；回合切换时槽位轮换</div>
+  <div class="row" style="color:#8a93a3">每板 (0,0) 角朝向中心枢纽；内缘 0 号线 = 连通轴线（加亮）</div>
+  <div class="row" style="color:#8a93a3">虚线 = 三条界河跨河通道（品紫 红↔蓝 / 橙 红↔黄 / 绿 蓝↔黄）</div>
+  <div class="row" style="margin-top:4px">
+    <span class="dot" style="background:#3ce0e0"></span>本板落点（青色）
+    <span class="dot" style="background:#ff22aa;margin-left:10px"></span>跨板落点（品红色）
+  </div>
+</div>
+<div id="log"></div>
+<div id="banner"><h2 id="bannerText"></h2><button id="againBtn" style="padding:8px 20px;cursor:pointer">再来一局</button></div>
+
+<!-- 共享规则引擎：与 3D 版（index.html）完全同一套规则 -->
+<script src="chess-rules.js"></script>
+<script>
+"use strict";
+/* 规则引擎由 chess-rules.js 提供，两个版本规则同源：
+   pieces/initPieces/legalMoves/allLegalMoves/inCheck/checkmate/applyMove/AXIS_COL/PLANES/PLANE_OWNER/TYPE_NAME */
+
+/* ===================== 游戏状态（UI 层） ===================== */
+let selected=null, turnIdx=0, gameOver=false, curMarkers=[], dirty=true;
+let mode="fan";                    // "fan"=2D-1 扇形 | "square"=2D-2 L形
+const turnOrder=["XY","XZ","YZ"]; // 红→蓝→黄
+const seat=p=>turnOrder.indexOf(p);
+const currentOwner=()=>PLANE_OWNER[turnOrder[turnIdx]];
+const OWNER_NAME={red:"红",blue:"蓝",green:"黄"}; // 阵营中文显示名（引擎 id 保持 red/blue/green）
+
+/* ===================== 画布与几何 ===================== */
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+/* 落点（§7.4.3）：青色=本板合法落点，品红色=跨平面落点；河色（§1.1）：品紫 红↔蓝 / 橙 红↔黄 / 绿 蓝↔黄 */
+const PALETTE={red:"#ff6b6b",blue:"#5aa9ff",green:"#ffd447",marker:"#3ce0e0",cross:"#ff22aa",sel:"#ffffff",
+  crossRB:"#ff22aa",crossRG:"#ff9922",crossBG:"#42e07c",hub:"#27d8c8",piece:"#232a38",front:"#ff9922"};
+const SEAM_COLOR={ "XY|XZ":PALETTE.crossRB, "XY|YZ":PALETTE.crossRG, "XZ|YZ":PALETTE.crossBG };
+function seamColor(a,b){ const k=a+"|"+b; return SEAM_COLOR[k]||SEAM_COLOR[b+"|"+a]; }
+let C=44, GAPG=30, HUB={x:0,y:0}, HUBR=16, R0=64, DR=26; // 方形板参数 C/GAPG；扇形板参数 R0/DR/HUBR
+
+function layout(){
+  // 扇形视图：整体外接圆半径 ≈ min(w,h)/2-40
+  const outer=Math.max(230,Math.min(innerWidth,innerHeight)/2-46);
+  DR=outer/15.6; R0=1.6*DR; HUBR=Math.max(11,DR*0.55);
+  // 方形视图：三板 L 形排布
+  C=Math.max(26,Math.min(46,Math.floor((innerHeight-230)/16),Math.floor((innerWidth-200)/16)));
+  GAPG=Math.max(20,Math.round(C*0.72));
+  HUB.x=Math.round(innerWidth/2); HUB.y=Math.round(innerHeight/2);
+}
+function resize(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  cv.width=innerWidth*dpr; cv.height=innerHeight*dpr;
+  cv.style.width=innerWidth+"px"; cv.style.height=innerHeight+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  layout(); dirty=true;
+}
+
+/* ===================== 坐标映射（两种视图） ===================== */
+/* 2D-1 扇形：ρ = R0+(c+rank)·DR（前线=同心弧），φ = θ板 + 90°/14·(c−rank)；
+   扇尖(7,7)=将位朝外，弧缘(0,0)角贴枢纽。行棋方 θ=+90°（正下方），另两家分居左上/右上 */
+let seatF=0, fanTarget=0, fanAnim=null; // 连续席位浮点数，回合切换时 ±1 缓动
+function wrap3(d){ d=((d%3)+3)%3; if(d>1.5)d-=3; return d; }
+function wrapPi(d){ d=(d+Math.PI)%(2*Math.PI); if(d<0)d+=2*Math.PI; return d-Math.PI; }
+function fanAngle(plane){ return Math.PI/2+(2*Math.PI/3)*wrap3(seat(plane)-seatF); }
+/* MIR 决定菱形镜像朝向，使内缘臂与相邻板的臂一一正对（与共享引擎 lineStep 配对一致）：
+   顺时针 红→蓝→绿 下，X河(红↔蓝)以 红rank0|蓝rank0 为界，
+   Z河(蓝↔绿)以 蓝col0|绿col0 为界，Y河(红↔绿)以 绿rank0|红col0 为界
+   → 红(XY)不镜像：rank0 臂朝 +45°(接蓝)、col0 臂朝 −45°(接绿)
+   → 蓝(XZ)镜像  ：rank0 臂朝 −45°(接红)、col0 臂朝 +45°(接绿)
+   → 绿(YZ)不镜像：rank0 臂朝 +45°(接红)、col0 臂朝 −45°(接蓝) */
+const FAN_MIR={XY:false,XZ:true,YZ:false};
+function fanPos(plane,c,r){
+  const th=fanAngle(plane);
+  const dx=Math.cos(th), dy=Math.sin(th), px=-dy, py=dx;
+  const lat=(FAN_MIR[plane]?r-c:c-r)*DR;
+  return {
+    x:HUB.x + dx*(R0+(c+r)*DR) + px*lat,
+    y:HUB.y + dy*(R0+(c+r)*DR) + py*lat
+  };
+}
+/* 2D-2 L形：展开平面图（顺时针 红→蓝→黄）——行棋方在下方(S)，上一家在其上方(N)，
+   下一家在其上方之右(E)；回合切换槽位轮换（§7.4.1）。每板 (0,0) 角朝向中心枢纽 */
+let sqMap=null, sqFade=null;
+function sqMapFor(t){
+  const cur=turnOrder[t], nxt=turnOrder[(t+1)%3], prv=turnOrder[(t+2)%3];
+  return {[cur]:"S",[nxt]:"E",[prv]:"N"};
+}
+const SQ_SLOTS={
+  /* 行棋方（下，左下象限）：col 向下、rank 向左（转置）——使 col0=上缘邻黄（橙线直连）、
+     rank0=右缘对蓝（紫弧绕枢纽），与 3D 几何中红板 col0 朝黄、rank0 朝蓝的邻接一致 */
+  S:{fx:r=>HUB.x-GAPG-C/2-r*C, fy:c=>HUB.y+GAPG+C/2+c*C, swap:true},
+  N:{fx:c=>HUB.x-GAPG-C/2-c*C, fy:r=>HUB.y-GAPG-C/2-r*C, swap:false}, // 上（上一家，左上象限）
+  E:{fx:c=>HUB.x+GAPG+C/2+c*C, fy:r=>HUB.y-GAPG-C/2-r*C, swap:false}  // 右（下一家，右上象限）
+};
+function sqPosWith(map,plane,c,r){
+  const s=SQ_SLOTS[map[plane]];
+  return s.swap?{x:s.fx(r),y:s.fy(c)}:{x:s.fx(c),y:s.fy(r)};
+}
+function pos(plane,c,r){ return mode==="fan"?fanPos(plane,c,r):sqPosWith(sqMap,plane,c,r); }
+
+/* ===================== 绘制公共件 ===================== */
+if(!ctx.roundRect) ctx.roundRect=function(x,y,w,h){ this.rect(x,y,w,h); }; // 旧浏览器回退
+function hexRGBA(hex,a){
+  const n=parseInt(hex.slice(1),16);
+  return `rgba(${n>>16},${(n>>8)&255},${n&255},${a})`;
+}
+function lineSeg(a,b,color,width,dash){
+  ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+  ctx.strokeStyle=color; ctx.lineWidth=width;
+  ctx.setLineDash(dash||[]); ctx.stroke(); ctx.setLineDash([]);
+}
+function drawPieceAt(p,x,y,pr,alpha){
+  const oc=PALETTE[p.owner];
+  ctx.globalAlpha=alpha;
+  ctx.fillStyle=PALETTE.piece;
+  ctx.beginPath(); ctx.arc(x,y,pr,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=oc; ctx.lineWidth=Math.max(2,pr*0.16);
+  ctx.beginPath(); ctx.arc(x,y,pr,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle=oc;
+  ctx.font=`bold ${Math.round(pr*1.2)}px 'Microsoft YaHei','KaiTi'`;
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.fillText(TYPE_NAME[p.type],x,y+1);
+  if(selected===p){
+    ctx.strokeStyle=PALETTE.sel; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(x,y,pr*1.24,0,Math.PI*2); ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+}
+function drawMarkersAt(posFn,pr,alpha){
+  for(const m of curMarkers){
+    const c=posFn(m.plane,m.col,m.rank);
+    const cross=selected&&m.plane!==selected.plane;
+    ctx.globalAlpha=alpha;
+    ctx.fillStyle=cross?PALETTE.cross:PALETTE.marker;
+    ctx.beginPath(); ctx.arc(c.x,c.y,cross?pr*0.7:pr*0.5,0,Math.PI*2); ctx.fill();
+    if(cross){
+      ctx.strokeStyle="rgba(255,255,255,.7)"; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(c.x,c.y,pr*0.7,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+}
+
+/* ===================== 2D-1 布置图视图（直网格 + 绕枢纽 U 形弯） ===================== */
+function drawFanRivers(){
+  /* 三条界河连接器：与共享引擎 lineStep 配对一致（列↔列 / 横↔列 / 横↔横）。
+     一条通道 = a 板的通道线 + b 板的通道线；把两线各自沿"通道线切向"延长交于 P，
+     再以 P 为控制点画 A→P→B 的圆角弯 —— 两端与被接的板线相切，整条读作一条连续线，
+     弯道贴着河面走，不向外鼓成大回环。
+     切向必须取"通道线"方向（板内相邻格 → 端点），不是沿岸方向 */
+  /* ia/ib：该端点处的"通道线"在板内的下一个格点 —— 即"进入板内"的方向。
+     不能统一按 (c||1,r||1) 取：公共顶点 (0,0) 上两个分量都是 0，
+     而三条 seam 在顶点处要走的通道方向并不相同（一条沿 r、一条沿 c），
+     取错会让切向指反 → 延长交点被甩到棋盘另一侧，弧线绕成穿过枢纽的大环 */
+  const seams=[
+    {a:"XY",b:"XZ",pa:i=>[i,0],pb:i=>[i,0],ia:p=>[p[0],p[1]+1],ib:p=>[p[0],p[1]+1]},  // 红 rank0 ↔ 蓝 rank0（通道＝col i，沿 r 进入）
+    {a:"XY",b:"YZ",pa:i=>[0,i],pb:i=>[i,0],ia:p=>[p[0]+1,p[1]],ib:p=>[p[0],p[1]+1]},  // 红 col0 ↔ 绿 rank0（沿 c / 沿 r）
+    {a:"XZ",b:"YZ",pa:i=>[0,i],pb:i=>[0,i],ia:p=>[p[0]+1,p[1]],ib:p=>[p[0]+1,p[1]]}   // 蓝 col0 ↔ 绿 col0（通道＝rank i，沿 c 进入）
+  ];
+  for(const s of seams){
+    const col=hexRGBA(seamColor(s.a,s.b),0.75);
+    for(let i=0;i<COLS;i++){
+      const A=pos(s.a,...s.pa(i)), B=pos(s.b,...s.pb(i));
+      const Ai=pos(s.a,...s.ia(s.pa(i))), Bi=pos(s.b,...s.ib(s.pb(i)));
+      let t1={x:A.x-Ai.x, y:A.y-Ai.y}, t2={x:B.x-Bi.x, y:B.y-Bi.y};
+      const l1=Math.hypot(t1.x,t1.y)||1, l2=Math.hypot(t2.x,t2.y)||1;
+      t1={x:t1.x/l1, y:t1.y/l1}; t2={x:t2.x/l2, y:t2.y/l2};
+      const den=t1.x*t2.y-t1.y*t2.x;
+      ctx.beginPath(); ctx.moveTo(A.x,A.y);
+      if(Math.abs(den)<1e-6){                 // 两线平行：退化为直连
+        ctx.lineTo(B.x,B.y);
+      }else{                                  // 延长交点 P → 以 P 为控制点的圆角弯
+        const t=((B.x-A.x)*t2.y-(B.y-A.y)*t2.x)/den;
+        ctx.quadraticCurveTo(A.x+t1.x*t, A.y+t1.y*t, B.x, B.y);
+      }
+      ctx.strokeStyle=col; ctx.lineWidth=1.6;
+      ctx.setLineDash([7,5]); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+}
+function renderFan(sf,alpha){
+  ctx.globalAlpha=alpha;
+  drawFanRivers();
+  // 中心枢纽
+  ctx.fillStyle=hexRGBA(PALETTE.hub,0.9);
+  ctx.beginPath(); ctx.arc(HUB.x,HUB.y,HUBR,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=hexRGBA(PALETTE.hub,0.35); ctx.lineWidth=HUBR*0.28;
+  ctx.beginPath(); ctx.arc(HUB.x,HUB.y,HUBR*1.55,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle=hexRGBA("#9ef6ff",0.95);
+  ctx.font=`${Math.round(HUBR*0.8)}px 'Microsoft YaHei'`; ctx.textAlign="center"; ctx.textBaseline="top";
+  ctx.fillText("枢纽",HUB.x,HUB.y+HUBR*1.55+4);
+  // 每板菱形方格
+  for(const pl of PLANES) drawFanBoard(pl);
+  ctx.globalAlpha=1;
+}
+function drawFanBoard(pl){
+  const owner=PLANE_OWNER[pl], oc=PALETTE[owner], cur=owner===currentOwner();
+  // 面板：(0,0)(7,0)(7,7)(0,7) 菱形直网格
+  ctx.beginPath();
+  fanPath(pl,0,0,true); fanPath(pl,7,0); fanPath(pl,7,7); fanPath(pl,0,7);
+  ctx.closePath();
+  ctx.fillStyle=hexRGBA(oc,cur?0.16:0.10); ctx.fill();
+  ctx.strokeStyle=hexRGBA(oc,cur?0.95:0.5); ctx.lineWidth=cur?2.5:1.5; ctx.stroke();
+  // 前线等值线（col+rank 相同的直线，对应布置图橙色前线）
+  for(let s=1;s<=6;s++)
+    lineSeg(fanPos(pl,s,0),fanPos(pl,0,s),hexRGBA(PALETTE.front,cur?0.30:0.20),1);
+  // 网格（直线）；内缘 0 号线 = 连通轴线（加亮），外缘两翼次亮
+  for(let c=0;c<COLS;c++)
+    lineSeg(fanPos(pl,c,0),fanPos(pl,c,7),hexRGBA(oc,c===AXIS_COL?0.9:(c===COLS-1?0.55:0.32)),c===AXIS_COL?2:1);
+  for(let r=0;r<ROWS;r++)
+    lineSeg(fanPos(pl,0,r),fanPos(pl,7,r),hexRGBA(oc,r===AXIS_COL?0.9:(r===ROWS-1?0.55:0.32)),r===AXIS_COL?2:1);
+  // 九宫斜线（角隅九宫 [5,7]×[5,7]，将位角处）
+  lineSeg(fanPos(pl,5,5),fanPos(pl,7,7),hexRGBA(oc,0.6),1);
+  lineSeg(fanPos(pl,5,7),fanPos(pl,7,5),hexRGBA(oc,0.6),1);
+  // 板标签（将位角外侧）
+  const ap=fanPos(pl,7,7), len=Math.hypot(ap.x-HUB.x,ap.y-HUB.y)||1;
+  ctx.fillStyle=hexRGBA(oc,0.95);
+  ctx.font=`bold ${Math.round(DR*0.55)}px 'Microsoft YaHei'`;
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.fillText({XY:"红·XY",XZ:"蓝·XZ",YZ:"黄·YZ"}[pl]+(cur?"（你）":""),ap.x+(ap.x-HUB.x)/len*DR*1.2,ap.y+(ap.y-HUB.y)/len*DR*1.2);
+}
+function fanPath(pl,c,r,moveFirst){
+  const p=fanPos(pl,c,r);
+  moveFirst?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y);
+}
+
+/* ===================== 2D-2 L形视图 ===================== */
+function drawSquareBoard(map,slot,pl){
+  const owner=PLANE_OWNER[pl], oc=PALETTE[owner], cur=owner===currentOwner();
+  const p00=sqPosWith(map,pl,0,0), p77=sqPosWith(map,pl,7,7);
+  const x0=Math.min(p00.x,p77.x)-C/2, y0=Math.min(p00.y,p77.y)-C/2;
+  const w=Math.abs(p77.x-p00.x)+C, h=Math.abs(p77.y-p00.y)+C;
+  ctx.fillStyle=hexRGBA(oc,cur?0.16:0.11);
+  ctx.beginPath(); ctx.roundRect(x0,y0,w,h,8); ctx.fill();
+  // 网格；内缘 0 号线为连通轴线（加亮）
+  for(let c=0;c<COLS;c++)
+    lineSeg(sqPosWith(map,pl,c,0),sqPosWith(map,pl,c,7),hexRGBA(oc,c===AXIS_COL?0.9:0.38),c===AXIS_COL?2:1);
+  for(let r=0;r<ROWS;r++)
+    lineSeg(sqPosWith(map,pl,0,r),sqPosWith(map,pl,7,r),hexRGBA(oc,r===AXIS_COL?0.9:0.38),r===AXIS_COL?2:1);
+  // 九宫斜线
+  lineSeg(sqPosWith(map,pl,5,5),sqPosWith(map,pl,7,7),hexRGBA(oc,0.6),1);
+  lineSeg(sqPosWith(map,pl,5,7),sqPosWith(map,pl,7,5),hexRGBA(oc,0.6),1);
+  // 边框
+  ctx.strokeStyle=hexRGBA(oc,cur?0.98:0.6); ctx.lineWidth=cur?2.5:1.5;
+  ctx.beginPath(); ctx.roundRect(x0,y0,w,h,8); ctx.stroke();
+  // 板标签（外侧角：S 板左下、N 板左上、E 板右上）
+  const lx=slot==="E"?x0+w-44:x0+44, ly=slot==="S"?y0+h-16:y0+14;
+  ctx.fillStyle=hexRGBA(oc,0.95);
+  ctx.font="bold 13px 'Microsoft YaHei'"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.fillText({XY:"红·XY",XZ:"蓝·XZ",YZ:"黄·YZ"}[pl]+(cur?"（你）":""),lx,ly);
+}
+/* 三条界河连接器：按 lineStep 配对（col c↔col c / rank r↔col r / rank r↔rank r），逐通道绘制：
+   1. 端点对齐（平行相对）→ 直虚线；
+   2. 两线平行但错位 → S 形贝塞尔经两板之间的界河带相连；
+   3. 两线垂直（绕角）→ 取"出板法向"（端点−板内邻点，与星形视图同式）切向延长线交点 K：
+      K 落在两板间空域时画单段二次贝塞尔（两端与板缘垂直相切，弧走枢纽对角空象限，逐条嵌套）；
+      K 会切进棋盘（槽位轮换后绕邻板外角）时改走三折通道 A→M1→W→M2→B：
+      沿出板法向退距 d，经空象限角点 W=C0+d·开侧方向（C0 为两板缘线交点），arcTo 圆滑转角。 */
+function drawSquareRivers(map){
+  const rects={}; for(const pl of PLANES){
+    const p00=sqPosWith(map,pl,0,0), p77=sqPosWith(map,pl,7,7);
+    rects[pl]={x0:Math.min(p00.x,p77.x)-C/2,y0:Math.min(p00.y,p77.y)-C/2,
+               x1:Math.max(p00.x,p77.x)+C/2,y1:Math.max(p00.y,p77.y)+C/2};
+  }
+  const SEAMS=[
+    {a:"XY",b:"XZ",pa:i=>[i,0],pb:i=>[i,0],ia:p=>[p[0],p[1]+1],ib:p=>[p[0],p[1]+1]},  // 红 rank0 ↔ 蓝 rank0
+    {a:"XY",b:"YZ",pa:i=>[0,i],pb:i=>[i,0],ia:p=>[p[0]+1,p[1]],ib:p=>[p[0],p[1]+1]},  // 红 col0 ↔ 黄 rank0
+    {a:"XZ",b:"YZ",pa:i=>[0,i],pb:i=>[0,i],ia:p=>[p[0]+1,p[1]],ib:p=>[p[0]+1,p[1]]}   // 蓝 col0 ↔ 黄 col0
+  ];
+  for(const s of SEAMS){
+    const col=hexRGBA(seamColor(s.a,s.b),0.75);
+    // 平行错位时：S 弯穿越带取两板间隙中点，再向避让枢纽圆的一侧偏移
+    const A0=sqPosWith(map,s.a,...s.pa(0)), A1=sqPosWith(map,s.a,...s.pa(1));
+    const B0=sqPosWith(map,s.b,...s.pb(0)), B1=sqPosWith(map,s.b,...s.pb(1));
+    const aHoriz=Math.abs(A1.x-A0.x)>Math.abs(A1.y-A0.y);
+    const cross=(A1.x-A0.x)*(B1.y-B0.y)-(A1.y-A0.y)*(B1.x-B0.x);
+    let bandX=null, bandY=null;
+    if(Math.abs(cross)<1e-6){
+      const ra=rects[s.a], rb=rects[s.b];
+      if(aHoriz){ // 两条横线：竖向穿越带
+        const mid=ra.x1<rb.x0?(ra.x1+rb.x0)/2:(rb.x1<ra.x0?(rb.x1+ra.x0)/2
+                 :(Math.max(ra.x0,rb.x0)+Math.min(ra.x1,rb.x1))/2);
+        bandX=mid+(HUB.x<=mid?1:-1)*GAPG*0.93;
+      }else{      // 两条竖线：横向穿越带
+        const mid=ra.y1<rb.y0?(ra.y1+rb.y0)/2:(rb.y1<ra.y0?(rb.y1+ra.y0)/2
+                 :(Math.max(ra.y0,rb.y0)+Math.min(ra.y1,rb.y1))/2);
+        bandY=mid+(HUB.y<=mid?1:-1)*GAPG*0.93;
+      }
+    }
+    const inRects=P=>PLANES.some(pl=>{const rc=rects[pl];return P.x>rc.x0&&P.x<rc.x1&&P.y>rc.y0&&P.y<rc.y1;});
+    for(let i=0;i<COLS;i++){
+      const pa=s.pa(i), pb=s.pb(i);
+      const A=sqPosWith(map,s.a,...pa), B=sqPosWith(map,s.b,...pb);
+      if(Math.abs(A.x-B.x)<0.5||Math.abs(A.y-B.y)<0.5){ // 端点对齐：直连
+        lineSeg(A,B,col,1.6,[7,5]);
+        continue;
+      }
+      // 出板法向（端点 − 板内邻点，与 drawFanRivers 同式）
+      const Ai=sqPosWith(map,s.a,...s.ia(pa)), Bi=sqPosWith(map,s.b,...s.ib(pb));
+      let nax=A.x-Ai.x, nay=A.y-Ai.y, nbx=B.x-Bi.x, nby=B.y-Bi.y;
+      const la=Math.hypot(nax,nay)||1, lb=Math.hypot(nbx,nby)||1;
+      nax/=la; nay/=la; nbx/=lb; nby/=lb;
+      ctx.beginPath(); ctx.moveTo(A.x,A.y);
+      if(Math.abs(nax*nby-nay*nbx)<1e-6){
+        // 平行错位：S 形贝塞尔，两端切向与河界线一致，中段穿过两板间的界河带
+        const c1=bandX!==null?{x:bandX,y:A.y}:{x:A.x,y:bandY};
+        const c2=bandX!==null?{x:bandX,y:B.y}:{x:B.x,y:bandY};
+        ctx.bezierCurveTo(c1.x,c1.y,c2.x,c2.y,B.x,B.y);
+      }else{
+        // 垂直绕角：两侧出板切向延长线的交点 K
+        const t=((B.x-A.x)*nby-(B.y-A.y)*nbx)/(nax*nby-nay*nbx);
+        const K={x:A.x+nax*t, y:A.y+nay*t};
+        if((K.x-A.x)*nax+(K.y-A.y)*nay>0&&(K.x-B.x)*nbx+(K.y-B.y)*nby>0&&!inRects(K)){
+          // K 在两板之间的空域（枢纽对角空象限）：单段二次贝塞尔，8 条各自嵌套展开
+          ctx.quadraticCurveTo(K.x,K.y,B.x,B.y);
+        }else{
+          // K 会切进棋盘（绕邻板外角）：三折通道走空象限，arcTo 圆滑转角
+          const d=GAPG*0.55, rad=GAPG*0.3;
+          const dotAB=(B.x-A.x)*nbx+(B.y-A.y)*nby;
+          const C0={x:A.x+nbx*dotAB, y:A.y+nby*dotAB};   // 两板缘线交点（共享外角）
+          const W={x:C0.x+(nax!==0?nax:nbx)*d, y:C0.y+(nay!==0?nay:nby)*d}; // 空象限角点
+          ctx.arcTo(A.x+nax*d,A.y+nay*d,W.x,W.y,rad);
+          ctx.arcTo(W.x,W.y,B.x+nbx*d,B.y+nby*d,rad);
+          ctx.arcTo(B.x+nbx*d,B.y+nby*d,B.x,B.y,rad);
+          ctx.lineTo(B.x,B.y);
+        }
+      }
+      ctx.strokeStyle=col; ctx.lineWidth=1.6;
+      ctx.setLineDash([7,5]); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+}
+function renderSquare(map,alpha){
+  ctx.globalAlpha=alpha;
+  drawSquareRivers(map);
+  for(const pl of PLANES) drawSquareBoard(map,map[pl],pl);
+  // 中心枢纽
+  ctx.fillStyle=hexRGBA(PALETTE.hub,0.9);
+  ctx.beginPath(); ctx.arc(HUB.x,HUB.y,GAPG*0.62,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=hexRGBA(PALETTE.hub,0.35); ctx.lineWidth=6;
+  ctx.beginPath(); ctx.arc(HUB.x,HUB.y,GAPG*1.05,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle=hexRGBA("#9ef6ff",0.95);
+  ctx.font="11px 'Microsoft YaHei'"; ctx.textAlign="left"; ctx.textBaseline="top";
+  ctx.fillText("枢纽",HUB.x+GAPG*1.1,HUB.y+GAPG*0.55); // 右下空象限，避免压到下方行棋方棋盘
+  ctx.globalAlpha=1;
+}
+
+/* ===================== 主绘制 ===================== */
+function renderActors(alpha){ // 棋子 + 选中环 + 落点
+  const pr=mode==="fan"?DR*0.42:C*0.38;
+  for(const p of pieces){
+    const c=pos(p.plane,p.col,p.rank);
+    drawPieceAt(p,c.x,c.y,pr,alpha);
+  }
+  if(selected) drawMarkersAt(pos,mode==="fan"?DR*0.42:C*0.38,alpha);
+}
+function draw(){
+  ctx.fillStyle="#0b0c10"; ctx.fillRect(0,0,innerWidth,innerHeight);
+  if(mode==="fan"){
+    renderFan(seatF,1);
+    renderActors(1);
+  }else if(sqFade){
+    const k=Math.min(1,(performance.now()-sqFade.t0)/sqFade.dur);
+    renderSquare(sqFade.old,1-easeIO(k));
+    renderSquare(sqMap,easeIO(k));
+    // 棋子按新旧槽位交叉淡化
+    const pr=C*0.38;
+    for(const p of pieces){
+      const a=sqPosWith(sqFade.old,p.plane,p.col,p.rank), b=sqPosWith(sqMap,p.plane,p.col,p.rank);
+      drawPieceAt(p,a.x,a.y,pr,1-easeIO(k));
+      drawPieceAt(p,b.x,b.y,pr,easeIO(k));
+    }
+  }else{
+    renderSquare(sqMap,1);
+    renderActors(1);
+  }
+}
+function easeIO(k){ return k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2; }
+
+/* ===================== 动画循环 ===================== */
+let fanAnimState=null; // {from,to,t0,dur}
+function loop(now){
+  if(fanAnimState){
+    const k=Math.min(1,(now-fanAnimState.t0)/fanAnimState.dur);
+    seatF=fanAnimState.from+(fanAnimState.to-fanAnimState.from)*easeIO(k);
+    if(k>=1){ seatF=fanAnimState.to; fanAnimState=null; }
+    dirty=true;
+  }
+  if(sqFade){
+    const k=Math.min(1,(now-sqFade.t0)/sqFade.dur);
+    dirty=true;
+    if(k>=1) sqFade=null;
+  }
+  if(dirty){ draw(); dirty=false; }
+  requestAnimationFrame(loop);
+}
+
+/* ===================== 回合切换 → 视图转向行棋方 ===================== */
+function beginTurnTransition(steps){
+  // 两种视图的状态每回合都同步，动画只作用于当前激活视图；
+  // 步数取实际跳过的座席数（出局/跳过会一次前进 2 席），保证行棋方棋盘始终转到正下方
+  fanTarget+=steps||1;
+  const old=sqMap;
+  sqMap=sqMapFor(turnIdx);
+  if(mode==="fan"){
+    fanAnimState={from:seatF,to:fanTarget,t0:performance.now(),dur:550};
+  }else{
+    seatF=fanTarget; // 非激活视图瞬时到位
+    if(JSON.stringify(old)!==JSON.stringify(sqMap)) sqFade={old,t0:performance.now(),dur:280};
+  }
+  dirty=true;
+}
+
+/* ===================== UI ===================== */
+function setTurnUI(){
+  const pl=turnOrder[turnIdx], owner=PLANE_OWNER[pl];
+  const el=document.getElementById("turn");
+  el.innerText=OWNER_NAME[owner]+"("+pl+")";
+  el.className="turn-"+owner;
+}
+function addLog(txt){
+  const d=document.getElementById("log");
+  d.innerHTML+="<div>"+txt+"</div>";
+  d.scrollTop=d.scrollHeight;
+}
+function descPiece(m){ const cn=["零","一","二","三","四","五","六","七"]; return cn[m.col]+"路"+cn[7-m.rank]+"行"; }
+
+/* ===================== 对局流程（与 3D 版一致，走子逻辑走共享引擎） ===================== */
+/* 出局清算（§4.2.3/§4.5）：将士象拔掉，兵马车炮归将军者统领 */
+function eliminate(owner,winner){
+  winner=winner||(checkerOf(owner)||{}).owner;
+  const res=eliminatePlayer(owner,winner);
+  addLog("<span style='color:#ffaa44'>⚠ "+OWNER_NAME[owner]+" 被将死，出局！将士象拔掉（"+res.pulled+"枚），兵马车炮 "+res.transferred+" 枚归 "+(winner?OWNER_NAME[winner]:"?")+" 统领</span>");
+  dirty=true;
+}
+function checkVictory(){
+  const alive=[...new Set(pieces.map(p=>p.owner))];
+  if(alive.length<=1){
+    gameOver=true;
+    document.getElementById("bannerText").innerText=alive.length===1?("🏆 "+OWNER_NAME[alive[0]]+" 获胜！"):"平局";
+    document.getElementById("banner").style.display="block";
+    return true;
+  }
+  return false;
+}
+/* §4.2.3：剩余两家时，出现将军即将军方最终获胜 */
+function suddenWin(mover){
+  const alive=[...new Set(pieces.map(p=>p.owner))];
+  if(alive.length!==2) return false;
+  const other=alive.find(o=>o!==mover);
+  if(!other||!inCheck(other)) return false;
+  gameOver=true;
+  addLog("⚔ 两家对弈："+OWNER_NAME[mover]+" 将军 "+OWNER_NAME[other]+"，"+OWNER_NAME[mover]+" 最终获胜！");
+  document.getElementById("bannerText").innerText="🏆 "+OWNER_NAME[mover]+" 获胜！";
+  document.getElementById("banner").style.display="block";
+  return true;
+}
+function advanceTurn(depth){
+  depth=depth||0;
+  if(depth>=3){ // 连续跳过全部存活方仍无子可走（§4.6：无法判定 → 平局）
+    gameOver=true;
+    document.getElementById("bannerText").innerText="平局";
+    document.getElementById("banner").style.display="block";
+    dirty=true;
+    return;
+  }
+  const prev=turnIdx;
+  for(let i=0;i<3;i++){
+    turnIdx=(turnIdx+1)%3;
+    const pl=turnOrder[turnIdx];
+    if(pieces.some(p=>p.owner===PLANE_OWNER[pl])) break;
+  }
+  setTurnUI();
+  const curPl=turnOrder[turnIdx], curOwner=PLANE_OWNER[curPl];
+  if(inCheck(curOwner)) addLog("⚠ "+OWNER_NAME[curOwner]+" 被将军，必须应将！");
+  if(allLegalMoves(curOwner).length===0){
+    if(inCheck(curOwner)){ eliminate(curOwner,checkerOf(curOwner)?checkerOf(curOwner).owner:null); }
+    else { addLog(OWNER_NAME[curOwner]+" 无子可走，回合跳过"); }
+    if(!checkVictory()) advanceTurn(depth+1);
+    return;
+  }
+  beginTurnTransition((turnIdx-prev+3)%3);
+}
+function doMove(piece,m){
+  const wasPlane=piece.plane, fromDesc=descPiece(piece);
+  const cap=applyMove(piece,m);
+  const cross=m.plane!==wasPlane;
+  let logTxt=OWNER_NAME[PLANE_OWNER[wasPlane]]+" "+TYPE_NAME[piece.type]+" 从"+wasPlane+" "+fromDesc+" 至"+m.plane+" "+descPiece({col:m.col,rank:m.rank})+(cross?"（跨板）":"");
+  if(cap) logTxt+=" 吃 "+OWNER_NAME[cap.owner]+" "+TYPE_NAME[cap.type];
+  addLog(logTxt);
+  selected=null; curMarkers=[]; dirty=true;
+  // 出局清算（§4.2.3）：其他两家被将死者，兵马车炮归走子方统领
+  for(const pl of PLANES){
+    const o=PLANE_OWNER[pl];
+    if(o===piece.owner) continue;
+    if(!pieces.some(p=>p.owner===o)) continue;
+    if(checkmate(o)){ eliminate(o,piece.owner); }
+  }
+  if(checkVictory()) return;
+  if(suddenWin(piece.owner)) return;
+  advanceTurn();
+}
+
+/* ===================== 交互 ===================== */
+function nearest(list,x,y,rad){
+  let best=null,bd=Infinity;
+  for(const it of list){
+    const c=pos(it.plane,it.col,it.rank);
+    const d=(c.x-x)**2+(c.y-y)**2;
+    if(d<bd){ bd=d; best=it; }
+  }
+  return bd<=rad*rad?best:null;
+}
+cv.addEventListener("pointerdown",e=>{
+  if(gameOver||fanAnimState||sqFade) return;
+  const x=e.clientX, y=e.clientY, rad=(mode==="fan"?DR:C)*0.55;
+  // 1) 落点标记
+  if(selected){
+    const mv=nearest(curMarkers,x,y,rad);
+    if(mv){ doMove(selected,mv); return; }
+  }
+  // 2) 棋子
+  const p=nearest(pieces,x,y,rad);
+  if(p&&PLANE_OWNER[turnOrder[turnIdx]]===p.owner){
+    const moves=legalMoves(p);
+    if(moves.length===0){ document.getElementById("tip").innerText="该棋子无合法走法"; selected=null; curMarkers=[]; dirty=true; return; }
+    selected=p; curMarkers=moves; dirty=true;
+    document.getElementById("tip").innerText="已选"+OWNER_NAME[p.owner]+" "+TYPE_NAME[p.type]+"，共"+moves.length+"处落点（品红色为跨板落点）";
+  }else{
+    selected=null; curMarkers=[]; dirty=true;
+    document.getElementById("tip").innerText=p?"不能选择对方/非当前回合棋子":"点击棋子选中";
+  }
+});
+
+/* ===================== 视图/模式切换 ===================== */
+const TIP_DEFAULT={
+  fan:"点击棋子选中，再点高亮点落子；行棋方棋盘位于正下方（顺时针 红→蓝→黄）",
+  square:"点击棋子选中，再点高亮点落子；行棋方棋盘在下方，上一家在其上方、下一家在其上方之右"
+};
+function setView(m){
+  if(fanAnimState){ seatF=fanTarget; fanAnimState=null; } // 扇形旋转瞬间到位
+  mode=m;
+  document.getElementById("legendFan").style.display=m==="fan"?"block":"none";
+  document.getElementById("legendSq").style.display=m==="square"?"block":"none";
+  document.getElementById("viewBtn").innerText=m==="fan"?"方形视图":"扇形视图";
+  document.getElementById("tip").innerText=TIP_DEFAULT[m];
+  dirty=true;
+}
+document.getElementById("resetBtn").onclick=reset;
+document.getElementById("againBtn").onclick=reset;
+document.getElementById("modeBtn").onclick=()=>{ location.href="index.html"; };
+document.getElementById("viewBtn").onclick=()=>setView(mode==="fan"?"square":"fan");
+window.addEventListener("resize",resize);
+
+/* ===================== 启动 ===================== */
+function reset(){
+  gameOver=false; selected=null; turnIdx=0; curMarkers=[];
+  seatF=0; fanTarget=0; fanAnimState=null;
+  sqMap=sqMapFor(0); sqFade=null;
+  document.getElementById("banner").style.display="none";
+  document.getElementById("log").innerHTML="";
+  document.getElementById("tip").innerText=TIP_DEFAULT[mode];
+  initPieces(); setTurnUI(); dirty=true;
+  addLog("对局开始，红方先行（点击棋子→点击高亮点）");
+}
+resize();
+reset();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

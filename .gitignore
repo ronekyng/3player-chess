@@ -1,0 +1,7 @@
+.workbuddy/
+*.log
+*.db
+.env
+*.bak
+*.dwg
+
