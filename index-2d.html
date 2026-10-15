@@ -50,7 +50,7 @@ body{overflow:hidden;background:#0b0c10;color:#eee;font-family:"Microsoft YaHei"
 <div id="legendSq" style="display:none">
   <div class="row" style="color:#fff">2D-2 L形视图（三方方形棋盘）</div>
   <div class="row"><span class="dot" style="background:#ff6b6b"></span>红 · XY　<span class="dot" style="background:#5aa9ff;margin-left:8px"></span>蓝 · XZ　<span class="dot" style="background:#ffd447;margin-left:8px"></span>黄 · YZ</div>
-  <div class="row" style="color:#8a93a3">行棋方棋盘在下方，上一家在其上方、下一家在其上方之右；顺时针 红→蓝→黄；回合切换时槽位轮换</div>
+  <div class="row" style="color:#8a93a3">行棋方棋盘在下方，上一家在其上方、下一家在其上方之右；顺时针 红→蓝→黄；回合切换时槽位轮换，三板网格/棋子/界河作为整幅图画随之轮转</div>
   <div class="row" style="color:#8a93a3">每板 (0,0) 角朝向中心枢纽；内缘 0 号线 = 连通轴线（加亮）</div>
   <div class="row" style="color:#8a93a3">虚线 = 三条界河跨河通道（品紫 红↔蓝 / 橙 红↔黄 / 绿 蓝↔黄）</div>
   <div class="row" style="margin-top:4px">
@@ -126,18 +126,27 @@ function fanPos(plane,c,r){
   };
 }
 /* 2D-2 L形：展开平面图（顺时针 红→蓝→黄）——行棋方在下方(S)，上一家在其上方(N)，
-   下一家在其上方之右(E)；回合切换槽位轮换（§7.4.1）。每板 (0,0) 角朝向中心枢纽 */
+   下一家在其上方之右(E)；回合切换槽位轮换（§7.4.1）。每板 (0,0) 角朝向中心枢纽。
+   轮转时三板网格随板一起旋转：每槽位备有两种朝向（a=col/rank 正向、b=转置互换），
+   按回合由 SQ_ORI 选取，使三条界河在任意回合都保持 t=0 模板形态
+   （两条缝缘平行正对→直连跨缝；一条缝两缘垂直→扇弧绕右下空象限；
+   扇弧角色 紫t0 → 绿t1 → 橙t2 轮换），网格/棋子/界河作为整幅图画一同轮转 */
 let sqMap=null, sqFade=null;
+const SQ_ORI=[{S:"a",N:"a",E:"a"},{S:"b",N:"a",E:"b"},{S:"a",N:"b",E:"b"}];
 function sqMapFor(t){
-  const cur=turnOrder[t], nxt=turnOrder[(t+1)%3], prv=turnOrder[(t+2)%3];
-  return {[cur]:"S",[nxt]:"E",[prv]:"N"};
+  const cur=turnOrder[t], nxt=turnOrder[(t+1)%3], prv=turnOrder[(t+2)%3], o=SQ_ORI[t%3];
+  return {[cur]:"S"+o.S, [nxt]:"E"+o.E, [prv]:"N"+o.N};
 }
 const SQ_SLOTS={
-  /* 行棋方（下，左下象限）：col 向下、rank 向左（转置）——使 col0=上缘邻黄（橙线直连）、
-     rank0=右缘对蓝（紫弧绕枢纽），与 3D 几何中红板 col0 朝黄、rank0 朝蓝的邻接一致 */
-  S:{fx:r=>HUB.x-GAPG-C/2-r*C, fy:c=>HUB.y+GAPG+C/2+c*C, swap:true},
-  N:{fx:c=>HUB.x-GAPG-C/2-c*C, fy:r=>HUB.y-GAPG-C/2-r*C, swap:false}, // 上（上一家，左上象限）
-  E:{fx:c=>HUB.x+GAPG+C/2+c*C, fy:r=>HUB.y-GAPG-C/2-r*C, swap:false}  // 右（下一家，右上象限）
+  /* S=下（左下象限）：Sa col向下/rank向左（转置）；Sb col向左/rank向下 */
+  Sa:{fx:r=>HUB.x-GAPG-C/2-r*C, fy:c=>HUB.y+GAPG+C/2+c*C, swap:true},
+  Sb:{fx:c=>HUB.x-GAPG-C/2-c*C, fy:r=>HUB.y+GAPG+C/2+r*C, swap:false},
+  /* N=上（左上象限）：Na col向左/rank向上；Nb col向上/rank向左（转置） */
+  Na:{fx:c=>HUB.x-GAPG-C/2-c*C, fy:r=>HUB.y-GAPG-C/2-r*C, swap:false},
+  Nb:{fx:r=>HUB.x-GAPG-C/2-r*C, fy:c=>HUB.y-GAPG-C/2-c*C, swap:true},
+  /* E=右（右上象限）：Ea col向右/rank向上；Eb col向上/rank向右（转置） */
+  Ea:{fx:c=>HUB.x+GAPG+C/2+c*C, fy:r=>HUB.y-GAPG-C/2-r*C, swap:false},
+  Eb:{fx:r=>HUB.x+GAPG+C/2+r*C, fy:c=>HUB.y-GAPG-C/2-c*C, swap:true}
 };
 function sqPosWith(map,plane,c,r){
   const s=SQ_SLOTS[map[plane]];
@@ -291,24 +300,29 @@ function drawSquareBoard(map,slot,pl){
   ctx.strokeStyle=hexRGBA(oc,cur?0.98:0.6); ctx.lineWidth=cur?2.5:1.5;
   ctx.beginPath(); ctx.roundRect(x0,y0,w,h,8); ctx.stroke();
   // 板标签（外侧角：S 板左下、N 板左上、E 板右上）
-  const lx=slot==="E"?x0+w-44:x0+44, ly=slot==="S"?y0+h-16:y0+14;
+  const lx=slot[0]==="E"?x0+w-44:x0+44, ly=slot[0]==="S"?y0+h-16:y0+14;
   ctx.fillStyle=hexRGBA(oc,0.95);
   ctx.font="bold 13px 'Microsoft YaHei'"; ctx.textAlign="center"; ctx.textBaseline="middle";
   ctx.fillText({XY:"红·XY",XZ:"蓝·XZ",YZ:"黄·YZ"}[pl]+(cur?"（你）":""),lx,ly);
 }
-/* 三条界河连接器：按 lineStep 配对（col c↔col c / rank r↔col r / rank r↔rank r），逐通道绘制：
-   1. 端点对齐（平行相对）→ 直虚线；
-   2. 两线平行但错位 → S 形贝塞尔经两板之间的界河带相连；
-   3. 两线垂直（绕角）→ 取"出板法向"（端点−板内邻点，与星形视图同式）切向延长线交点 K：
-      K 落在两板间空域时画单段二次贝塞尔（两端与板缘垂直相切，弧走枢纽对角空象限，逐条嵌套）；
-      K 会切进棋盘（槽位轮换后绕邻板外角）时改走三折通道 A→M1→W→M2→B：
-      沿出板法向退距 d，经空象限角点 W=C0+d·开侧方向（C0 为两板缘线交点），arcTo 圆滑转角。 */
+/* 三条界河连接器：按 lineStep 配对（col c↔col c / rank r↔col r / rank r↔rank r），逐通道绘制。
+   槽位几何固定：S=左下、N=左上、E=右上、右下永远空；槽位朝向按回合由 SQ_ORI 选取，
+   三板网格随轮转旋转，因此任意回合的画面都与 t=0 模板同构：
+   恰好两条缝的缝缘线平行正对（8 条直虚线跨缝），一条缝两缘垂直（8 条扇弧经
+   枢纽对角空象限嵌套展开；扇弧角色 紫 t0 → 绿 t1 → 橙 t2 随板轮换）：
+   1. 端点对齐（同 x 或同 y）→ 直虚线；
+   2. 两端出板法向垂直 → 出板切向延长线交点 K，K 前向且落在空域时画单段
+      二次贝塞尔 quad(K)（两端与缝缘垂直相切，即模板扇弧）；
+   3. 兜底（正常朝向表下不出现）：平行错位或 K 不可用时走跳跃弧——
+      沿臂到 i=0 角点 A0h/B0h，经空象限控制点 C=hub+GAPG·2.4·u 单段二次贝塞尔跨越
+      （u=两角点方向之和，对径时取 inRects 空侧的垂直候选）。 */
 function drawSquareRivers(map){
   const rects={}; for(const pl of PLANES){
     const p00=sqPosWith(map,pl,0,0), p77=sqPosWith(map,pl,7,7);
     rects[pl]={x0:Math.min(p00.x,p77.x)-C/2,y0:Math.min(p00.y,p77.y)-C/2,
                x1:Math.max(p00.x,p77.x)+C/2,y1:Math.max(p00.y,p77.y)+C/2};
   }
+  const inRects=P=>PLANES.some(pl=>{const rc=rects[pl];return P.x>rc.x0&&P.x<rc.x1&&P.y>rc.y0&&P.y<rc.y1;});
   const SEAMS=[
     {a:"XY",b:"XZ",pa:i=>[i,0],pb:i=>[i,0],ia:p=>[p[0],p[1]+1],ib:p=>[p[0],p[1]+1]},  // 红 rank0 ↔ 蓝 rank0
     {a:"XY",b:"YZ",pa:i=>[0,i],pb:i=>[i,0],ia:p=>[p[0]+1,p[1]],ib:p=>[p[0],p[1]+1]},  // 红 col0 ↔ 黄 rank0
@@ -316,59 +330,43 @@ function drawSquareRivers(map){
   ];
   for(const s of SEAMS){
     const col=hexRGBA(seamColor(s.a,s.b),0.75);
-    // 平行错位时：S 弯穿越带取两板间隙中点，再向避让枢纽圆的一侧偏移
-    const A0=sqPosWith(map,s.a,...s.pa(0)), A1=sqPosWith(map,s.a,...s.pa(1));
-    const B0=sqPosWith(map,s.b,...s.pb(0)), B1=sqPosWith(map,s.b,...s.pb(1));
-    const aHoriz=Math.abs(A1.x-A0.x)>Math.abs(A1.y-A0.y);
-    const cross=(A1.x-A0.x)*(B1.y-B0.y)-(A1.y-A0.y)*(B1.x-B0.x);
-    let bandX=null, bandY=null;
-    if(Math.abs(cross)<1e-6){
-      const ra=rects[s.a], rb=rects[s.b];
-      if(aHoriz){ // 两条横线：竖向穿越带
-        const mid=ra.x1<rb.x0?(ra.x1+rb.x0)/2:(rb.x1<ra.x0?(rb.x1+ra.x0)/2
-                 :(Math.max(ra.x0,rb.x0)+Math.min(ra.x1,rb.x1))/2);
-        bandX=mid+(HUB.x<=mid?1:-1)*GAPG*0.93;
-      }else{      // 两条竖线：横向穿越带
-        const mid=ra.y1<rb.y0?(ra.y1+rb.y0)/2:(rb.y1<ra.y0?(rb.y1+ra.y0)/2
-                 :(Math.max(ra.y0,rb.y0)+Math.min(ra.y1,rb.y1))/2);
-        bandY=mid+(HUB.y<=mid?1:-1)*GAPG*0.93;
-      }
-    }
-    const inRects=P=>PLANES.some(pl=>{const rc=rects[pl];return P.x>rc.x0&&P.x<rc.x1&&P.y>rc.y0&&P.y<rc.y1;});
     for(let i=0;i<COLS;i++){
       const pa=s.pa(i), pb=s.pb(i);
       const A=sqPosWith(map,s.a,...pa), B=sqPosWith(map,s.b,...pb);
-      if(Math.abs(A.x-B.x)<0.5||Math.abs(A.y-B.y)<0.5){ // 端点对齐：直连
-        lineSeg(A,B,col,1.6,[7,5]);
-        continue;
-      }
-      // 出板法向（端点 − 板内邻点，与 drawFanRivers 同式）
-      const Ai=sqPosWith(map,s.a,...s.ia(pa)), Bi=sqPosWith(map,s.b,...s.ib(pb));
-      let nax=A.x-Ai.x, nay=A.y-Ai.y, nbx=B.x-Bi.x, nby=B.y-Bi.y;
-      const la=Math.hypot(nax,nay)||1, lb=Math.hypot(nbx,nby)||1;
-      nax/=la; nay/=la; nbx/=lb; nby/=lb;
       ctx.beginPath(); ctx.moveTo(A.x,A.y);
-      if(Math.abs(nax*nby-nay*nbx)<1e-6){
-        // 平行错位：S 形贝塞尔，两端切向与河界线一致，中段穿过两板间的界河带
-        const c1=bandX!==null?{x:bandX,y:A.y}:{x:A.x,y:bandY};
-        const c2=bandX!==null?{x:bandX,y:B.y}:{x:B.x,y:bandY};
-        ctx.bezierCurveTo(c1.x,c1.y,c2.x,c2.y,B.x,B.y);
+      if(Math.abs(A.x-B.x)<0.5||Math.abs(A.y-B.y)<0.5){ // 端点对齐：直连
+        ctx.lineTo(B.x,B.y);
       }else{
-        // 垂直绕角：两侧出板切向延长线的交点 K
-        const t=((B.x-A.x)*nby-(B.y-A.y)*nbx)/(nax*nby-nay*nbx);
-        const K={x:A.x+nax*t, y:A.y+nay*t};
-        if((K.x-A.x)*nax+(K.y-A.y)*nay>0&&(K.x-B.x)*nbx+(K.y-B.y)*nby>0&&!inRects(K)){
-          // K 在两板之间的空域（枢纽对角空象限）：单段二次贝塞尔，8 条各自嵌套展开
-          ctx.quadraticCurveTo(K.x,K.y,B.x,B.y);
-        }else{
-          // K 会切进棋盘（绕邻板外角）：三折通道走空象限，arcTo 圆滑转角
-          const d=GAPG*0.55, rad=GAPG*0.3;
-          const dotAB=(B.x-A.x)*nbx+(B.y-A.y)*nby;
-          const C0={x:A.x+nbx*dotAB, y:A.y+nby*dotAB};   // 两板缘线交点（共享外角）
-          const W={x:C0.x+(nax!==0?nax:nbx)*d, y:C0.y+(nay!==0?nay:nby)*d}; // 空象限角点
-          ctx.arcTo(A.x+nax*d,A.y+nay*d,W.x,W.y,rad);
-          ctx.arcTo(W.x,W.y,B.x+nbx*d,B.y+nby*d,rad);
-          ctx.arcTo(B.x+nbx*d,B.y+nby*d,B.x,B.y,rad);
+        // 出板法向（端点 − 板内邻点，与 drawFanRivers 同式）
+        const Ai=sqPosWith(map,s.a,...s.ia(pa)), Bi=sqPosWith(map,s.b,...s.ib(pb));
+        let nax=A.x-Ai.x, nay=A.y-Ai.y, nbx=B.x-Bi.x, nby=B.y-Bi.y;
+        const la=Math.hypot(nax,nay)||1, lb=Math.hypot(nbx,nby)||1;
+        nax/=la; nay/=la; nbx/=lb; nby/=lb;
+        let jump=true;
+        if(Math.abs(nax*nby-nay*nbx)>1e-6){
+          // 垂直绕角：两侧出板切向延长线的交点 K
+          const t=((B.x-A.x)*nby-(B.y-A.y)*nbx)/(nax*nby-nay*nbx);
+          const K={x:A.x+nax*t, y:A.y+nay*t};
+          if((K.x-A.x)*nax+(K.y-A.y)*nay>0&&(K.x-B.x)*nbx+(K.y-B.y)*nby>0&&!inRects(K)){
+            // K 在两板之间的空域（枢纽对角空象限）：单段二次贝塞尔，8 条各自嵌套展开
+            ctx.quadraticCurveTo(K.x,K.y,B.x,B.y);
+            jump=false;
+          }
+        }
+        if(jump){ // 兜底跳跃弧：沿臂到 i=0 角点，经空象限控制点跨越
+          const A0h=sqPosWith(map,s.a,...s.pa(0)), B0h=sqPosWith(map,s.b,...s.pb(0));
+          let uax=A0h.x-HUB.x, uay=A0h.y-HUB.y, ubx=B0h.x-HUB.x, uby=B0h.y-HUB.y;
+          const ual=Math.hypot(uax,uay)||1, ubl=Math.hypot(ubx,uby)||1;
+          uax/=ual; uay/=ual; ubx/=ubl; uby/=ubl;
+          let ux=uax+ubx, uy=uay+uby, ul=Math.hypot(ux,uy);
+          if(ul<1e-6){ // 对径：取空侧垂直候选
+            const cands=[{x:-uay,y:uax},{x:uay,y:-uax}];
+            const pick=cands.find(d=>!inRects({x:HUB.x+d.x*GAPG*2.4,y:HUB.y+d.y*GAPG*2.4}))||cands[0];
+            ux=pick.x; uy=pick.y; ul=1;
+          }
+          const Ct={x:HUB.x+ux/ul*GAPG*2.4, y:HUB.y+uy/ul*GAPG*2.4};
+          ctx.lineTo(A0h.x,A0h.y);
+          ctx.quadraticCurveTo(Ct.x,Ct.y,B0h.x,B0h.y);
           ctx.lineTo(B.x,B.y);
         }
       }
